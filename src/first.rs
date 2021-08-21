@@ -76,6 +76,22 @@ impl List {
     }
 }
 
+impl Drop for List {
+    fn drop(&mut self) {
+        let mut elem = Link::Empty;
+        // Take ownership over the head
+        mem::swap(&mut elem, &mut self.head);
+
+        // Other correct approach would be:
+        // let elem = mem::replace(&mut self.head, Link::Empty);
+
+        while let Link::More(boxed) = elem {
+            // Old value got drop here
+            elem = boxed.next;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,5 +157,22 @@ mod tests {
         // Check exhaustion
         assert_eq!(list.pop(), Some(1));
         assert_eq!(list.pop(), None);
+    }
+
+    #[test]
+    fn break_the_stack() {
+        {
+            let mut list = List::new();
+
+            for i in 1..100000 {
+                list.push(i);
+            }
+            println!("Leaving, call dtor");
+            // List.drop -> Link.drop() -> Box.drop() -> Node.drop() -> next.drop() (Link.drop())
+            //                ^---------------------------------------------------------|
+            // Recursive call! Tail recursion cannot be applied here
+        }
+
+        println!("Still alive!");
     }
 }
