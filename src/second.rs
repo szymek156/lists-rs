@@ -1,3 +1,5 @@
+use std::{fmt::Debug, ops::Deref};
+
 #[derive(PartialEq, Debug)]
 pub struct List<T> {
     head: Link<T>,
@@ -110,11 +112,38 @@ impl<T> Iterator for List<T> {
 // where I: Iterator;
 // Anything what implements Iterator, implements IntoIterator
 
-// impl <'a, T> Iterator for List<T> {
+// pub struct Iter<'a, T> {
+//     next: Option<&'a Node<T>>,
+// }
+
+// impl<T> List<T> {
+//     // Compiler deduces lifetime for Iter is the same as for self,
+//     // Makes sense -> Iter needs to lives as long as &self (List)
+//     pub fn iter(&self) -> Iter<T> {
+//         Iter {
+
+//             // node: &Box<Node<T>>
+//             // *node: Box<Node<T>>
+//             // **node: Node<T>
+//             // &**node: &Node<T>
+//             // next: self.head.as_ref().map(|node| &**node),
+
+//             // node.as_ref() calls method from Box, which is clever enough to figure we mean
+//             // &Node<T>, not &Box<Node<T>>
+
+//             next: self.head.as_ref().map(|node| {let t= node.as_ref(); t}),
+//         }
+//     }
+// }
+
+// impl<'a, T> Iterator for Iter<'a, T> {
 //     type Item = &'a T;
 
 //     fn next(&mut self) -> Option<Self::Item> {
-//         todo!()
+//         self.next.map(|node| {
+//             self.next = node.next.as_ref().map(|node| node.as_ref());
+//             &node.elem
+//         })
 //     }
 // }
 
@@ -123,10 +152,13 @@ pub struct Iter<'a, T> {
 }
 
 impl<T> List<T> {
-    // Compiler deduces lifetime for Iter is the same as for self
-    pub fn iter(&self) -> Iter<T> {
+    pub fn iter<'a>(&'a self) -> Iter<'a, T> {
+        // As deref for Option extracts value from some:
+        // Some(a) -> a.deref()
+        // where 'a' is Box<Node<T>>
+        // calling deref on a box results with reference to underlying value -> &Node<T>
         Iter {
-            next: self.head.as_ref().map(|node| node.as_ref()),
+            next: self.head.as_deref(),
         }
     }
 }
@@ -135,16 +167,56 @@ impl<'a, T> Iterator for Iter<'a, T> {
     type Item = &'a T;
 
     fn next(&mut self) -> Option<Self::Item> {
+        // map takes self by value, but since Item is an immutable reference
+        // there is no move but COPY (you can have as many imm references as you like)
+        // 
+        // self.next.map(|node| { &node.elem });
+        //
+        // It's possible to use self.next, after map:
+        // println!("self next after {:?}", self.next);
         self.next.map(|node| {
-            self.next = node.next.as_ref().map(|node| node.as_ref());
+            self.next = node.next.as_deref();
             &node.elem
+        })
+    }
+}
+
+pub struct IterMut<'a, T> {
+    next: Option<&'a mut Node<T>>,
+}
+
+impl<T> List<T> {
+    pub fn iter_mut<'a>(&'a mut self) -> IterMut<'a, T> {
+        // As deref for Option extracts value from some:
+        // Some(a) -> a.deref()
+        // where 'a' is Box<Node<T>>
+        // calling deref on a box results with reference to underlying value -> &Node<T>
+        IterMut {
+            next: self.head.as_deref_mut(),
+        }
+    }
+}
+
+impl<'a, T> Iterator for IterMut<'a, T> {
+    type Item = &'a mut T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // self.next.take(), sets next to None, and we get control of value from next
+        self.next.take().map(|node| {
+            // We map Some(a) to a
+
+            // We set next to point to another element
+            self.next = node.next.as_deref_mut();
+
+            // And we return current element
+            &mut node.elem
         })
     }
 }
 
 impl<T> Drop for List<T> {
     fn drop(&mut self) {
-        // Take ownership over the head
+        // Take ownership over the head, sets head to None
         let mut elem = self.head.take();
 
         while let Some(boxed) = elem {
@@ -230,9 +302,11 @@ mod tests {
                 list.push(i);
             }
             println!("Leaving, call dtor");
+            // Without custom Drop implementation, compiler does:
             // List.drop -> Link.drop() -> Box.drop() -> Node.drop() -> next.drop() (Link.drop())
             //                ^---------------------------------------------------------|
             // Recursive call! Tail recursion cannot be applied here
+            // Having list with huge amount of elements will blow up the stack
         }
 
         println!("Still alive!");
@@ -287,7 +361,6 @@ mod tests {
             assert_eq!(iter.next(), Some(&3));
             assert_eq!(iter.next(), Some(&2));
             assert_eq!(iter.next(), Some(&1));
-
         }
 
         // Collection is not moved, nor altered
