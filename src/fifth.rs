@@ -1,6 +1,8 @@
-pub struct List<'a, T> {
+use std::ptr::{self, null_mut};
+
+pub struct List<T> {
     head: Link<T>,
-    tail: Option<&'a mut Node<T>>, // NEW!
+    tail: *mut Node<T>, // NEW!
 }
 
 type Link<T> = Option<Box<Node<T>>>;
@@ -10,15 +12,20 @@ struct Node<T> {
     next: Link<T>,
 }
 
-impl<'a, T> List<'a, T> {
+impl<T> List<T> {
     pub fn new() -> Self {
         List {
             head: None,
-            tail: None,
+            tail: null_mut(),
         }
     }
 
 
+
+    // Lets have push implementation like this:
+    // pub fn push(&'a mut self, elem: T) {
+    // }
+    //
     // error[E0499]: cannot borrow `list` as mutable more than once at a time
     // --> src/fifth.rs:75:9
     // |
@@ -53,46 +60,49 @@ impl<'a, T> List<'a, T> {
     // But now we require that mutable reference:
     // old_tail.next.as_deref_mut() lives as long as self
     // and upon second call to push
-    // we create another mutable reference with such lifetime, but previous still exists (will exist as long as &self exists)
+    // we create another mutable reference to with such lifetime, but previous still exists (will exist as long as &self exists)
     // so we have two mutable references with lifetime of &self - that's where compiler explodes, you cannot have two
-    pub fn push<'b>(&'b mut self, elem: T) {
-        let new_tail = Box::new(Node {
+    // I think ref cells could help here, since they check borrowing at runtime
+    pub fn push(&mut self, elem: T) {
+        let mut new_tail = Box::new(Node {
             elem: elem,
-            // When you push onto the tail, your next is always None
             next: None,
         });
-
-        // Put the box in the right place, and then grab a reference to its Node
-        let new_tail: Option<&'a mut Node<T>> = match self.tail.take() {
-            Some(old_tail) => {
-                // If the old tail existed, update it to point to the new tail
-                old_tail.next = Some(new_tail);
-                old_tail.next.as_deref_mut()
+    
+        // Type needs to be specified, otherwise compiler understands:
+        // &mut *new_tail;
+        // as: * -> deref a box, returns T
+        // &mut do a mut borrow to T
+        // but we want a pointer!
+        let raw_tail: *mut _ = &mut *new_tail;
+    
+        // .is_null checks for null, equivalent to checking for None
+        if !self.tail.is_null() {
+            // If the old tail existed, update it to point to the new tail
+            unsafe {
+                (*self.tail).next = Some(new_tail);
             }
-            None => {
-                // Otherwise, update the head to point to it
-                self.head = Some(new_tail);
-                self.head.as_deref_mut()
-            }
-        };
-
-        self.tail = new_tail;
+        } else {
+            // Otherwise, update the head to point to it
+            self.head = Some(new_tail);
+        }
+    
+        self.tail = raw_tail;
     }
+    
 
-    // pub fn pop(&'a mut self) -> Option<T> {
-    //     // Grab the list's current head
-    //     self.head.take().map(|head| {
-    //         let head = *head;
-    //         self.head = head.next;
+    pub fn pop(&mut self) -> Option<T> {
+        self.head.take().map(|head| {
+            let head = *head;
+            self.head = head.next;
 
-    //         // If we're out of `head`, make sure to set the tail to `None`.
-    //         if self.head.is_none() {
-    //             self.tail = None;
-    //         }
+            if self.head.is_none() {
+                self.tail = ptr::null_mut();
+            }
 
-    //         head.elem
-    //     })
-    // }
+            head.elem
+        })
+    }
 }
 
 #[cfg(test)]
